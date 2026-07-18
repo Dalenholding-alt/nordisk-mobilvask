@@ -1,0 +1,17 @@
+name = "nordisk-mobilvask-test"
+main = "src/worker.js"
+compatibility_date = "2026-07-18"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "nordisk-mobilvask-test-db"
+database_id = "0ba2ef68-d701-4e7b-afe0-9cc32d7bdf5d"
+migrations_dir = "migrations"
