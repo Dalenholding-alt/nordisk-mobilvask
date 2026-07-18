@@ -1,6 +1,6 @@
 # Nordisk Mobilvask
 
-Cloudflare Workers- og D1-app for Nordisk Mobilvask. Prosjektet inneholder offentlig landingsside og booking, automatisk avdelingsfordeling, franchiseinnlogging, ordrestyring og fakturagrunnlag.
+Cloudflare Workers- og D1-app for Nordisk Mobilvask. Prosjektet inneholder offentlig landingsside og booking, avdelingsvisning, franchiseportal, ordrestyring og fakturagrunnlag.
 
 ## Cloudflare-oppsett
 
@@ -25,44 +25,28 @@ Build command:     npm install && npm run check
 Deploy command:    npm run deploy
 ```
 
-Legg inn disse som krypterte variabler/secrets i Cloudflare:
+For den nåværende testdeployen fungerer også:
 
 ```text
-SETUP_TOKEN
-RATE_LIMIT_SALT
+Build command:     tom
+Deploy command:    npx wrangler deploy
 ```
 
-`SETUP_TOKEN` brukes bare ved første opprettelse av administrator. `RATE_LIMIT_SALT` brukes til anonymisert begrensning av offentlige bookingforsøk.
-
-## Første innlogging
-
-Etter publisering åpner du:
+Appens nødvendige filer ligger nå i:
 
 ```text
-https://<worker-adresse>/portal/
-```
-
-Fyll inn:
-
-- Firma: Nordisk Mobilvask
-- Administrator: Dalen Holding
-- E-post: dalenholding@outlook.com
-- Et nytt passord på minst 10 tegn
-- Verdien du la inn som `SETUP_TOKEN`
-
-## Lokal test
-
-```bash
-npm install
-npm run db:migrate:local
-npm run dev
+src/worker.js
+public/index.html
+public/portal/index.html
+scripts/assemble.mjs
 ```
 
 ## Sider
 
-- `/` – landingsside og offentlig booking
-- `/portal/` – driftssystem for hovedkontor og franchisetakere
+- `/` – landingsside og testbooking
+- `/portal/` – klikkbar driftssystem-demo
+- `/api/health` – enkel teknisk helsesjekk
 
-## Viktig før produksjon
+## Før produksjon
 
-Bekreft kontaktinformasjon, priser, personverntekst, organisasjonsnumre og fakturaflyt før løsningen brukes med reelle kunder. Fakturadelen lager fakturagrunnlag; EHF, betalingsintegrasjon og automatisk bokføring er ikke inkludert.
+Testversjonen kan deles med kollegaer, men bookingformen lagrer foreløpig ikke reelle data. Bekreft kontaktinformasjon, priser, personverntekst, organisasjonsnumre og fakturaflyt før løsningen brukes med reelle kunder.
