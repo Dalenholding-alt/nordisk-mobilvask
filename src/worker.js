@@ -1,47 +1,29 @@
-const securityHeaders = {
-  "X-Content-Type-Options": "nosniff",
-  "X-Frame-Options": "DENY",
-  "Referrer-Policy": "strict-origin-when-cross-origin",
-  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-};
-
-function withHeaders(response) {
-  const headers = new Headers(response.headers);
-  for (const [key, value] of Object.entries(securityHeaders)) headers.set(key, value);
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
-}
-
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
-
-    if (url.pathname === "/api/health") {
-      return new Response(JSON.stringify({
-        ok: true,
-        service: "Nordisk Mobilvask",
-        environment: "test",
-        time: new Date().toISOString(),
-      }), {
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          "cache-control": "no-store",
-          ...securityHeaders,
-        },
-      });
-    }
-
-    if (url.pathname === "/portal") {
-      return Response.redirect(`${url.origin}/portal/`, 308);
-    }
-
-    if (!env.ASSETS) {
-      return new Response("Static assets binding is missing.", { status: 500 });
-    }
-
-    return withHeaders(await env.ASSETS.fetch(request));
-  },
-};
+const COOKIE='nm_session',ITER=210000;
+const H={'X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Referrer-Policy':'strict-origin-when-cross-origin','Permissions-Policy':'camera=(), microphone=(), geolocation=()','Content-Security-Policy':"default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"};
+const j=(x,s=200,h={})=>new Response(JSON.stringify(x),{status:s,headers:{'content-type':'application/json;charset=utf-8','cache-control':'no-store',...H,...h}});
+const email=x=>String(x||'').trim().toLowerCase();
+const cookies=r=>Object.fromEntries(String(r.headers.get('cookie')||'').split(';').map(x=>x.trim().split('=').map(decodeURIComponent)).filter(x=>x.length===2));
+const b64=b=>{let s='';for(const x of b)s+=String.fromCharCode(x);return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')};
+const rnd=(n=32)=>{const b=new Uint8Array(n);crypto.getRandomValues(b);return b64(b)};
+async function hash(p,s){const k=await crypto.subtle.importKey('raw',new TextEncoder().encode(p),'PBKDF2',false,['deriveBits']);return b64(new Uint8Array(await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:new TextEncoder().encode(s),iterations:ITER},k,256)))}
+function eq(a,b){a=String(a);b=String(b);if(a.length!==b.length)return false;let x=0;for(let i=0;i<a.length;i++)x|=a.charCodeAt(i)^b.charCodeAt(i);return x===0}
+const same=r=>r.headers.get('origin')===new URL(r.url).origin;
+async function body(r){if(!(r.headers.get('content-type')||'').includes('application/json'))throw Error('TYPE');const t=await r.text();if(t.length>16000)throw Error('SIZE');return JSON.parse(t||'{}')}
+function cookie(t,remember){return `${COOKIE}=${encodeURIComponent(t)}; Path=/; HttpOnly; Secure; SameSite=Strict${remember?'; Max-Age=2592000':''}`}
+function publicUser(u){return{id:Number(u.id),name:u.name,email:u.email,role:u.role,franchiseeId:u.franchisee_id==null?null:Number(u.franchisee_id),franchiseeName:u.franchisee_name||null}}
+async function count(env){return Number((await env.DB.prepare('SELECT COUNT(*) count FROM users').first())?.count||0)}
+async function session(r,env){const t=cookies(r)[COOKIE];if(!t)return null;return await env.DB.prepare(`SELECT s.id session_id,u.id,u.name,u.email,u.role,u.franchisee_id,f.name franchisee_name FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN franchisees f ON f.id=u.franchisee_id WHERE s.id=? AND s.expires_at>CURRENT_TIMESTAMP AND u.active=1 LIMIT 1`).bind(t).first()}
+async function newSession(id,remember,env){const t=rnd(),days=remember?30:0.5;await env.DB.prepare("INSERT INTO sessions(id,user_id,expires_at) VALUES(?,?,datetime('now',?))").bind(t,id,`+${days} days`).run();return t}
+async function auth(r,env,roles){const u=await session(r,env);if(!u)return{response:j({error:'Ikke innlogget.'},401)};if(roles&&!roles.includes(u.role))return{response:j({error:'Ingen tilgang.'},403)};return{u}}
+async function api(r,env,url){try{
+ if(url.pathname==='/api/health')return j({ok:true,service:'Nordisk Mobilvask',time:new Date().toISOString()});
+ if(url.pathname==='/api/auth/status') {const u=await session(r,env);return j({initialized:(await count(env))>0,authenticated:!!u,user:u?publicUser(u):null})}
+ if(url.pathname==='/api/auth/setup'&&r.method==='POST'){if(!same(r))return j({error:'Ugyldig forespørsel.'},403);if(!env.SETUP_TOKEN)return j({error:'SETUP_TOKEN mangler i Cloudflare.'},503);if(await count(env))return j({error:'Systemet er allerede satt opp.'},409);const x=await body(r),e=email(x.email),p=String(x.password||''),n=String(x.name||'').trim();if(!eq(String(x.setupToken||''),env.SETUP_TOKEN))return j({error:'Ugyldig oppsettstoken.'},403);if(n.length<2||!/^\S+@\S+\.\S+$/.test(e)||p.length<12)return j({error:'Kontroller navn, e-post og passord (minst 12 tegn).'},400);const s=rnd(18),ph=await hash(p,s);await env.DB.batch([env.DB.prepare("INSERT INTO users(name,email,role,password_hash,password_salt) VALUES(?,?,'admin',?,?)").bind(n,e,ph,s),env.DB.prepare("INSERT INTO company_settings(key,value) VALUES('company_name',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(x.company||'Nordisk Mobilvask'))]);const u=await env.DB.prepare('SELECT id,name,email,role,franchisee_id FROM users WHERE email=?').bind(e).first(),t=await newSession(u.id,true,env);return j({ok:true,user:publicUser(u)},201,{'set-cookie':cookie(t,true)})}
+ if(url.pathname==='/api/auth/login'&&r.method==='POST'){if(!same(r))return j({error:'Ugyldig forespørsel.'},403);const x=await body(r),e=email(x.email),p=String(x.password||'');const u=await env.DB.prepare('SELECT u.*,f.name franchisee_name FROM users u LEFT JOIN franchisees f ON f.id=u.franchisee_id WHERE u.email=? AND u.active=1 LIMIT 1').bind(e).first();if(!u||!eq(await hash(p,u.password_salt),u.password_hash))return j({error:'Feil e-post eller passord.'},401);await env.DB.prepare('DELETE FROM sessions WHERE expires_at<=CURRENT_TIMESTAMP').run();const t=await newSession(u.id,!!x.remember,env);return j({ok:true,user:publicUser(u)},200,{'set-cookie':cookie(t,!!x.remember)})}
+ if(url.pathname==='/api/auth/logout'&&r.method==='POST'){if(!same(r))return j({error:'Ugyldig forespørsel.'},403);const t=cookies(r)[COOKIE];if(t)await env.DB.prepare('DELETE FROM sessions WHERE id=?').bind(t).run();return j({ok:true},200,{'set-cookie':`${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`})}
+ if(url.pathname==='/api/auth/me'){const a=await auth(r,env);return a.response||j({user:publicUser(a.u)})}
+ if(url.pathname==='/api/admin/franchisees'){const a=await auth(r,env,['admin']);if(a.response)return a.response;const q=await env.DB.prepare('SELECT id,name FROM franchisees WHERE active=1 ORDER BY name').all();return j({franchisees:q.results||[]})}
+ if(url.pathname==='/api/admin/users'){const a=await auth(r,env,['admin']);if(a.response)return a.response;if(r.method==='GET'){const q=await env.DB.prepare('SELECT u.id,u.name,u.email,u.role,u.active,u.franchisee_id,f.name franchisee_name,u.created_at FROM users u LEFT JOIN franchisees f ON f.id=u.franchisee_id ORDER BY u.active DESC,u.name').all();return j({users:q.results||[]})}if(r.method==='POST'){if(!same(r))return j({error:'Ugyldig forespørsel.'},403);const x=await body(r),e=email(x.email),p=String(x.password||''),n=String(x.name||'').trim(),role=String(x.role||'staff'),fid=x.franchiseeId?Number(x.franchiseeId):null;if(n.length<2||!/^\S+@\S+\.\S+$/.test(e)||p.length<12||!['admin','franchisee','staff'].includes(role))return j({error:'Kontroller feltene. Passord må ha minst 12 tegn.'},400);if(role!=='admin'&&!Number.isInteger(fid))return j({error:'Velg avdeling.'},400);const s=rnd(18),ph=await hash(p,s);try{const q=await env.DB.prepare('INSERT INTO users(franchisee_id,name,email,role,password_hash,password_salt) VALUES(?,?,?,?,?,?)').bind(role==='admin'?null:fid,n,e,role,ph,s).run();return j({ok:true,id:Number(q.meta?.last_row_id)},201)}catch{return j({error:'E-postadressen er allerede i bruk.'},409)}}}
+ return j({error:'Ikke funnet.'},404)
+}catch(e){console.error(e);return j({error:e.message==='TYPE'?'Ugyldig innholdstype.':e.message==='SIZE'?'Forespørselen er for stor.':'En intern feil oppstod.'},e.message==='TYPE'?415:e.message==='SIZE'?413:500)}}
+export default{async fetch(r,env){const u=new URL(r.url);if(u.pathname.startsWith('/api/'))return api(r,env,u);if(u.pathname==='/portal')return Response.redirect(u.origin+'/portal/',308);if(u.pathname==='/portal/login')return Response.redirect(u.origin+'/portal/login/',308);if(u.pathname.startsWith('/portal/login/')){if(await session(r,env))return Response.redirect(u.origin+'/portal/',302);const x=await env.ASSETS.fetch(r),h=new Headers(x.headers);Object.entries(H).forEach(([k,v])=>h.set(k,v));h.set('cache-control','no-store');return new Response(x.body,{status:x.status,headers:h})}if(u.pathname.startsWith('/portal/')){if(!await session(r,env))return Response.redirect(u.origin+'/portal/login/',302);const x=await env.ASSETS.fetch(r),h=new Headers(x.headers);Object.entries(H).forEach(([k,v])=>h.set(k,v));h.set('cache-control','no-store');return new Response(x.body,{status:x.status,headers:h})}const x=await env.ASSETS.fetch(r),h=new Headers(x.headers);Object.entries(H).forEach(([k,v])=>h.set(k,v));return new Response(x.body,{status:x.status,headers:h})}};
