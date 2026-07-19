@@ -1,5 +1,5 @@
 const COOKIE = 'nm_session';
-const ITER = 210000;
+const ITER = 100000;
 const SEC = {
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
@@ -15,6 +15,7 @@ const reply = (data, status = 200, extra = {}) => new Response(JSON.stringify(da
 
 const normalizeEmail = value => String(value || '').trim().toLowerCase();
 const sameOrigin = request => request.headers.get('origin') === new URL(request.url).origin;
+const sqlTime = date => date.toISOString().slice(0, 19).replace('T', ' ');
 
 function cookies(request) {
   const out = {};
@@ -25,24 +26,33 @@ function cookies(request) {
   return out;
 }
 
+function toBase64Url(bytes) {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
 function randomToken(size = 32) {
   const bytes = new Uint8Array(size);
   crypto.getRandomValues(bytes);
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  return toBase64Url(bytes);
 }
 
 async function hashPassword(password, salt) {
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: new TextEncoder().encode(salt), iterations: ITER }, key, 256);
-  return randomTokenFromBytes(new Uint8Array(bits));
-}
-
-function randomTokenFromBytes(bytes) {
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(password),
+    { name: 'PBKDF2' },
+    false,
+    ['deriveBits'],
+  );
+  const bits = await crypto.subtle.deriveBits({
+    name: 'PBKDF2',
+    hash: 'SHA-256',
+    salt: new TextEncoder().encode(salt),
+    iterations: ITER,
+  }, key, 256);
+  return toBase64Url(new Uint8Array(bits));
 }
 
 function equal(a, b) {
@@ -55,7 +65,7 @@ function equal(a, b) {
 
 async function readBody(request) {
   if (!(request.headers.get('content-type') || '').includes('application/json')) throw new Error('TYPE');
-  return JSON.parse(await request.text() || '{}');
+  return JSON.parse((await request.text()) || '{}');
 }
 
 async function sessionUser(request, env) {
@@ -63,69 +73,126 @@ async function sessionUser(request, env) {
   if (!token) return null;
   return env.DB.prepare(`SELECT u.id,u.name,u.email,u.role,u.franchisee_id,f.name franchisee_name
     FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN franchisees f ON f.id=u.franchisee_id
-    WHERE s.id=? AND s.expires_at>CURRENT_TIMESTAMP AND u.active=1 LIMIT 1`).bind(token).first();
+    WHERE s.id=? AND datetime(s.expires_at)>CURRENT_TIMESTAMP AND u.active=1 LIMIT 1`).bind(token).first();
 }
 
 async function createSession(userId, env, remember = true) {
   const token = randomToken();
-  const expiry = remember ? '+30 days' : '+12 hours';
-  await env.DB.prepare("INSERT INTO sessions(id,user_id,expires_at) VALUES(?,?,datetime('now',?))").bind(token, userId, expiry).run();
+  const expires = new Date(Date.now() + (remember ? 30 * 86400000 : 12 * 3600000));
+  await env.DB.prepare('INSERT INTO sessions(id,user_id,expires_at) VALUES(?,?,?)')
+    .bind(token, userId, sqlTime(expires)).run();
   return token;
 }
 
 function userView(user) {
-  return { id: Number(user.id), name: user.name, email: user.email, role: user.role, franchiseeId: user.franchisee_id ?? null, franchiseeName: user.franchisee_name || null };
+  return {
+    id: Number(user.id),
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    franchiseeId: user.franchisee_id == null ? null : Number(user.franchisee_id),
+    franchiseeName: user.franchisee_name || null,
+  };
+}
+
+function setupError(stage, error) {
+  console.error('Administrator setup failed', stage, error);
+  const messages = {
+    password: 'Kunne ikke behandle passordet. Prøv et annet passord.',
+    user: 'Kunne ikke opprette administratoren i databasen.',
+    settings: 'Kunne ikke lagre firmainnstillingene.',
+    session: 'Administratoren ble opprettet, men innloggingen kunne ikke startes. Oppdater siden og logg inn.',
+  };
+  return reply({ error: messages[stage] || 'En intern feil oppstod.' }, 500);
+}
+
+async function setupAdministrator(request, env) {
+  if (!sameOrigin(request)) return reply({ error: 'Ugyldig forespørsel.' }, 403);
+  const configured = String(env.SETUP_TOKEN || '').trim();
+  if (!configured) return reply({ error: 'SETUP_TOKEN mangler i Cloudflare.' }, 503);
+
+  const existing = Number((await env.DB.prepare('SELECT COUNT(*) count FROM users').first())?.count || 0);
+  if (existing > 0) return reply({ error: 'Systemet er allerede satt opp.' }, 409);
+
+  const body = await readBody(request);
+  const name = String(body.name || '').trim() || 'Dalen Holding';
+  const email = normalizeEmail(body.email);
+  const password = String(body.password || '');
+  const company = String(body.company || 'Nordisk Mobilvask').trim() || 'Nordisk Mobilvask';
+
+  if (!equal(String(body.setupToken || '').trim(), configured)) return reply({ error: 'Ugyldig oppsettstoken.' }, 403);
+  if (name.length < 2 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 12) {
+    return reply({ error: 'Kontroller navn, e-post og passord (minst 12 tegn).' }, 400);
+  }
+
+  let stage = 'password';
+  try {
+    const salt = randomToken(18);
+    const passwordHash = await hashPassword(password, salt);
+
+    stage = 'user';
+    await env.DB.prepare("INSERT INTO users(name,email,role,password_hash,password_salt,active) VALUES(?,?,'admin',?,?,1)")
+      .bind(name, email, passwordHash, salt).run();
+
+    stage = 'settings';
+    await env.DB.prepare("INSERT OR REPLACE INTO company_settings(key,value,updated_at) VALUES('company_name',?,CURRENT_TIMESTAMP)")
+      .bind(company).run();
+
+    const user = await env.DB.prepare('SELECT id,name,email,role,franchisee_id FROM users WHERE email=? LIMIT 1')
+      .bind(email).first();
+    if (!user) throw new Error('USER_NOT_FOUND_AFTER_INSERT');
+
+    stage = 'session';
+    const token = await createSession(user.id, env, true);
+    return reply({ ok: true, user: userView(user) }, 201, {
+      'set-cookie': `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000`,
+    });
+  } catch (error) {
+    return setupError(stage, error);
+  }
 }
 
 async function api(request, env, url) {
   try {
     if (url.pathname === '/api/health') return reply({ ok: true, service: 'Nordisk Mobilvask' });
+
     if (url.pathname === '/api/auth/status') {
       const count = Number((await env.DB.prepare('SELECT COUNT(*) count FROM users').first())?.count || 0);
       const user = await sessionUser(request, env);
       return reply({ initialized: count > 0, authenticated: !!user, user: user ? userView(user) : null });
     }
-    if (url.pathname === '/api/auth/setup' && request.method === 'POST') {
-      if (!sameOrigin(request)) return reply({ error: 'Ugyldig forespørsel.' }, 403);
-      const configured = String(env.SETUP_TOKEN || '').trim();
-      if (!configured) return reply({ error: 'SETUP_TOKEN mangler i Cloudflare.' }, 503);
-      const count = Number((await env.DB.prepare('SELECT COUNT(*) count FROM users').first())?.count || 0);
-      if (count > 0) return reply({ error: 'Systemet er allerede satt opp.' }, 409);
-      const body = await readBody(request);
-      const name = String(body.name || '').trim() || 'Dalen Holding';
-      const email = normalizeEmail(body.email);
-      const password = String(body.password || '');
-      if (!equal(String(body.setupToken || '').trim(), configured)) return reply({ error: 'Ugyldig oppsettstoken.' }, 403);
-      if (name.length < 2 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 12) return reply({ error: 'Kontroller navn, e-post og passord (minst 12 tegn).' }, 400);
-      const salt = randomToken(18);
-      const passwordHash = await hashPassword(password, salt);
-      await env.DB.batch([
-        env.DB.prepare("INSERT INTO users(name,email,role,password_hash,password_salt) VALUES(?,?,'admin',?,?)").bind(name, email, passwordHash, salt),
-        env.DB.prepare("INSERT INTO company_settings(key,value) VALUES('company_name',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(body.company || 'Nordisk Mobilvask')),
-      ]);
-      const user = await env.DB.prepare('SELECT id,name,email,role,franchisee_id FROM users WHERE email=?').bind(email).first();
-      const token = await createSession(user.id, env, true);
-      return reply({ ok: true, user: userView(user) }, 201, { 'set-cookie': `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000` });
-    }
+
+    if (url.pathname === '/api/auth/setup' && request.method === 'POST') return setupAdministrator(request, env);
+
     if (url.pathname === '/api/auth/login' && request.method === 'POST') {
       if (!sameOrigin(request)) return reply({ error: 'Ugyldig forespørsel.' }, 403);
       const body = await readBody(request);
-      const user = await env.DB.prepare('SELECT u.*,f.name franchisee_name FROM users u LEFT JOIN franchisees f ON f.id=u.franchisee_id WHERE u.email=? AND u.active=1 LIMIT 1').bind(normalizeEmail(body.email)).first();
-      if (!user || !equal(await hashPassword(String(body.password || ''), user.password_salt), user.password_hash)) return reply({ error: 'Feil e-post eller passord.' }, 401);
+      const user = await env.DB.prepare('SELECT u.*,f.name franchisee_name FROM users u LEFT JOIN franchisees f ON f.id=u.franchisee_id WHERE u.email=? AND u.active=1 LIMIT 1')
+        .bind(normalizeEmail(body.email)).first();
+      if (!user || !equal(await hashPassword(String(body.password || ''), user.password_salt), user.password_hash)) {
+        return reply({ error: 'Feil e-post eller passord.' }, 401);
+      }
       const token = await createSession(user.id, env, !!body.remember);
       const maxAge = body.remember ? '; Max-Age=2592000' : '';
-      return reply({ ok: true, user: userView(user) }, 200, { 'set-cookie': `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Strict${maxAge}` });
+      return reply({ ok: true, user: userView(user) }, 200, {
+        'set-cookie': `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Strict${maxAge}`,
+      });
     }
+
     if (url.pathname === '/api/auth/logout' && request.method === 'POST') {
       if (!sameOrigin(request)) return reply({ error: 'Ugyldig forespørsel.' }, 403);
       const token = cookies(request)[COOKIE];
       if (token) await env.DB.prepare('DELETE FROM sessions WHERE id=?').bind(token).run();
-      return reply({ ok: true }, 200, { 'set-cookie': `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0` });
+      return reply({ ok: true }, 200, {
+        'set-cookie': `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`,
+      });
     }
+
     if (url.pathname === '/api/auth/me') {
       const user = await sessionUser(request, env);
       return user ? reply({ user: userView(user) }) : reply({ error: 'Ikke innlogget.' }, 401);
     }
+
     return reply({ error: 'Ikke funnet.' }, 404);
   } catch (error) {
     console.error(error);
