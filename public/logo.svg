@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 340" role="img" aria-labelledby="t d">
+<title id="t">Nordisk Mobilvask</title><desc id="d">Bil, lastebil, gravemaskin og bølger i Nordisk Mobilvask-profil</desc>
+<defs><linearGradient id="wave" x1="0" x2="1"><stop stop-color="#4eb7d4"/><stop offset="1" stop-color="#1b8ead"/></linearGradient></defs>
+<g fill="none" stroke="#0d2a51" stroke-linecap="round" stroke-linejoin="round">
+<path stroke-width="10" d="M183 142c41-55 116-82 225-82 91 0 158 17 203 52l45 20 27 31-10 31H105l19-35 59-17Z"/>
+<path stroke-width="7" d="M237 129c34-39 75-57 126-57h72c44 0 87 14 129 42M254 128h309M198 145l-49 32M594 132l55 23"/>
+<path stroke-width="15" d="M225 193c0-38 23-66 52-66s52 28 52 66M539 193c0-38 23-66 52-66s52 28 52 66"/>
+<path stroke-width="8" d="M377 132l34 45h77l-11-41M523 160l58 5"/>
+</g>
+<g opacity=".55" fill="none" stroke="#415777" stroke-width="6" stroke-linecap="round">
+<path d="M91 103h78v58M100 103l21-29h41l21 29M94 126h69M628 100l18-39 28 8-11 51M654 70l-5 68M619 136h79"/>
+</g>
+<g fill="none" stroke="url(#wave)" stroke-linecap="round"><path stroke-width="18" d="M78 192c86-39 130-32 199 4 82 42 160 57 247 37 70-16 110-40 162-50"/><path stroke-width="10" d="M76 219c96-28 156-17 230 15 93 40 181 40 269 10 50-17 82-32 116-43"/></g>
+<circle cx="58" cy="197" r="8" fill="#2fa8c8"/><circle cx="705" cy="202" r="8" fill="#2fa8c8"/>
+<text x="380" y="289" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="76" letter-spacing="20" fill="#0d2a51">NORDISK</text>
+<path d="M130 314h100M530 314h100" stroke="#2fa8c8" stroke-width="4"/>
+<text x="380" y="324" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="28" letter-spacing="19" fill="#2fa8c8">MOBILVASK</text>
+</svg>
