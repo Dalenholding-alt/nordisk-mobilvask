@@ -1,5 +1,5 @@
 name = "nordisk-mobilvask"
-main = "src/worker.js"
+main = "src/email-enabled.js"
 compatibility_date = "2026-07-20"
 
 [assets]
@@ -15,3 +15,8 @@ binding = "DB"
 database_name = "nordisk-mobilvask-test-db"
 database_id = "0ba2ef68-d701-4e7b-afe0-9cc32d7bdf5d"
 migrations_dir = "migrations"
+
+# The application only sends booking notifications to post@nordiskmobilvask.no.
+# Verify the destination and onboard nordiskmobilvask.com in Email Service.
+[[send_email]]
+name = "EMAIL"
