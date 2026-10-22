@@ -1,3 +1,4 @@
+# Release request: publish the latest customer site, portal routing fix and booking email support.
 name = "nordisk-mobilvask"
 main = "src/site-entry.js"
 compatibility_date = "2026-07-20"
