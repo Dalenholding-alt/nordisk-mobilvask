@@ -2,7 +2,7 @@ import app from './email-enabled.js';
 
 // Keep legacy links working without exposing the protected HTML assets.
 // Authentication and email delivery remain in the existing application.
-export const RELEASE = 'routing-email-2026-10-23';
+export const RELEASE = 'routing-email-2026-10-23-reconnected';
 const aliases = new Map([
   ['/index-v2', '/'],
   ['/index-v2/', '/'],
